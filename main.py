@@ -192,8 +192,8 @@ def get_exc_degree(det_i: Determinant, det_j: Determinant) -> Tuple[int,int]:
     ...                Determinant(alpha=(1, 3), beta=(5, 7)) )
     (1, 2)
     '''
-    ed_up =  len(set(det_i.alpha).symmetric_difference(set(det_j.alpha))) // 2
-    ed_dn =  len(set(det_i.beta).symmetric_difference(set(det_j.beta))) // 2
+    ed_up = len(set(det_i.alpha).symmetric_difference(set(det_j.alpha))) // 2
+    ed_dn = len(set(det_i.beta).symmetric_difference(set(det_j.beta))) // 2
     return (ed_up, ed_dn)
 
 
@@ -221,11 +221,10 @@ def get_exc_degree(det_i: Determinant, det_j: Determinant) -> Tuple[int,int]:
 from itertools import takewhile
 class Hamiltonian(object):
 
-    def __init__(self, N_orb, d_one_e_integral: One_electron_integral, d_two_e_integral: Two_electron_integral, E0: float):
+    def __init__(self, d_one_e_integral: One_electron_integral, d_two_e_integral: Two_electron_integral, E0: float):
         self.d_one_e_integral = d_one_e_integral
         self.d_two_e_integral = d_two_e_integral
         self.E0 = E0
-        self.N_orb = N_orb
 
     def H_one_e(self, i: OrbitalIdx, j: OrbitalIdx) -> float :
         '''One-electron part of the Hamiltonian: Kinetic energy (T) and
@@ -283,15 +282,13 @@ class Hamiltonian(object):
 
 
     def H_i_i(self, det_i: Determinant) -> float:
-        from itertools   import product
-
         '''Diagonal element of the Hamiltonian : <I|H|I>.'''
         res  = self.E0
         res += sum(self.H_one_e(i,i) for i in det_i.alpha)
         res += sum(self.H_one_e(i,i) for i in det_i.beta)
         
-        res += sum(self.H_two_e(i,j,i,j) - self.H_two_e(i,j,j,i) for i,j in product(det_i.alpha, det_i.alpha)) / 2.
-        res += sum(self.H_two_e(i,j,i,j) - self.H_two_e(i,j,j,i) for i,j in product(det_i.beta, det_i.beta)) / 2.
+        res += sum(self.H_two_e(i,j,i,j) - self.H_two_e(i,j,j,i) for i,j in combinations(det_i.alpha,2)) 
+        res += sum(self.H_two_e(i,j,i,j) - self.H_two_e(i,j,j,i) for i,j in combinations(det_i.beta, 2)) 
            
         res += sum(self.H_two_e(i,j,i,j) for (i,j) in product(det_i.alpha, det_i.beta))
      
@@ -360,9 +357,25 @@ class Hamiltonian(object):
         else:
             return 0.
 
-def E_var(E0, N_ord, psi_coef, psi_det, d_one_e_integral,  d_two_e_integral):
-    lewis = Hamiltonian(N_ord, d_one_e_integral,d_two_e_integral, E0)
+def E_var(E0, N_orb, psi_coef, psi_det, d_one_e_integral,  d_two_e_integral):
+    lewis = Hamiltonian(d_one_e_integral,d_two_e_integral, E0)
     return sum(psi_coef[i] * psi_coef[j] * lewis.H_i_j(det_i,det_j) for (i,det_i),(j,det_j) in product(enumerate(psi_det),enumerate(psi_det)) )
+
+
+def E_pt2(E0, N_orb, psi_coef, psi_det, d_one_e_integral,  d_two_e_integral):
+
+    external_space = Excitation(N_orb).gen_all_connected_determinant_from_psi(psi_det) - set(psi_det)
+    lewis = Hamiltonian(d_one_e_integral,d_two_e_integral, E0)
+
+    import numpy as np
+    h_mat = np.array([lewis.H_i_j(det_external, det_internal) for det_external,det_internal in product(external_space,psi_det)])
+    h_mat = h_mat.reshape(len(external_space),len(psi_det))
+    h_psi = np.einsum('ij,j -> i', h_mat,psi_coef)
+
+    E = E_var(E0, N_orb, psi_coef, psi_det, d_one_e_integral,  d_two_e_integral)
+    denom = np.divide(1.,np.array([E - lewis.H_i_i(det_external) for det_external in external_space]))
+    return np.einsum('i,i,i -> ', h_psi, h_psi, denom)
+    
 
 import unittest
 class TestVariationalEnergy(unittest.TestCase):
@@ -378,22 +391,49 @@ class TestVariationalEnergy(unittest.TestCase):
     def test_f2_631g_10det(self):
         fcidump_path='f2_631g.FCIDUMP'
         wf_path='f2_631g.10det.wf'
-        E_ref =  -198.548963
-        E =  self.load_and_compute(fcidump_path,wf_path)
+        E_ref = -198.548963
+        E = self.load_and_compute(fcidump_path,wf_path)
         self.assertAlmostEqual(E_ref,E,places=6)
 
     def test_f2_631g_30det(self):
         fcidump_path='f2_631g.FCIDUMP'
         wf_path='f2_631g.30det.wf'
-        E_ref =  -198.738780989106
-        E =  self.load_and_compute(fcidump_path,wf_path)
+        E_ref = -198.738780989106
+        E = self.load_and_compute(fcidump_path,wf_path)
         self.assertAlmostEqual(E_ref,E,places=6)
 
     def test_f2_631g_161det(self):
         fcidump_path='f2_631g.161det.fcidump'
         wf_path='f2_631g.161det.wf'
-        E_ref =  -198.8084269796
-        E =  self.load_and_compute(fcidump_path,wf_path)
+        E_ref = -198.8084269796
+        E = self.load_and_compute(fcidump_path,wf_path)
+        self.assertAlmostEqual(E_ref,E,places=6)
+
+class TestVariationalPT2Energy(unittest.TestCase):
+
+    def load_and_compute(self,fcidump_path,wf_path):
+        # Load integrals
+        N_ord, E0, d_one_e_integral, d_two_e_integral = load_integrals(f"data/{fcidump_path}")
+        # Load wave function
+        psi_coef, psi_det = load_wf(f"data/{wf_path}")
+        # Computation of the Energy of the input wave function (variational energy)
+        return E_pt2(E0, N_ord,psi_coef, psi_det, d_one_e_integral, d_two_e_integral) 
+ 
+    def test_nh3_631g_1det(self):
+        fcidump_path='nh3.1det.fcidump'
+        wf_path='nh3.1det.wf'
+        #E_ref_qp = -0.14596170077240345
+        E_ref = -0.15656281814513243
+        E = self.load_and_compute(fcidump_path,wf_path)
+        self.assertAlmostEqual(E_ref,E,places=6)
+
+
+    def test_f2_631g_10det(self):
+        fcidump_path='f2_631g.FCIDUMP'
+        wf_path='f2_631g.10det.wf'
+        #E_ref_qp = -0.24321128
+        E_ref = -0.24318862445167724
+        E = self.load_and_compute(fcidump_path,wf_path)
         self.assertAlmostEqual(E_ref,E,places=6)
 
 
